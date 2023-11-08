@@ -1,19 +1,76 @@
 #include <sourcemod>
-#include <sdktools>
+#include <smlib>
 #define PLUGIN_VERSION "1.0"
-#define MAX_WEAPONS 10
+#include <sdkhooks>
+#define MAX_AMMO 100
+#define AMMO_PER_CHARGE 20
+#define START_AMMO 80
+
+bool hasUsedGluonGun[MAXPLAYERS+1];
+int playerAmmo[MAXPLAYERS+1];
+
+int Clamp(int value, int min, int max) {
+    if (value < min) {
+        return min;
+    } else if (value > max) {
+        return max;
+    } else {
+        return value;
+    }
+}
 
 public Plugin:myinfo =
 {
-        name = "Charger",
+        name = "Xen_Charger",
         author = "sil_el_mot",
         description = "chargeroverride",
         version = PLUGIN_VERSION,
         url = "http://www.sourcemod.net/"
 };
 
+public void OnPluginStart() {
+    // Hook the custom event "weapon_gluon_fired"
+    HookEvent("weapon_gluon_fired", Event_WeaponGluonFired);
+    HookEvent("player_death", OnPlayerDeath);
+}
+
+
+// Der Event-Handler für den Tod eines Spielers.
+public void OnPlayerDeath(Event event, const char[] name, bool dontBroadcast) {
+    int client = GetClientOfUserId(event.GetInt("userid"));
+
+    // Stellen Sie sicher, dass der Spielerindex gültig ist.
+    if (client > 0 && IsClientInGame(client)) {
+        // Setzen Sie die Munition zurück
+        playerAmmo[client] = START_AMMO; // Angenommen, START_AMMO ist eine Konstante, die Sie definiert haben.
+        // Setzen Sie auch hasUsedGluonGun zurück
+        hasUsedGluonGun[client] = true;
+    }
+}
+
+public Event_WeaponGluonFired(Handle:event, const char[] name, bool:dontBroadcast) {
+    // Get the client who fired the gluon gun
+    int client = GetEventInt(event, "owner");
+    int ammoUsed = GetEventInt(event, "ammo_used");
+    // Make sure the client index is valid and the client is connected
+    if(client > 0 && client <= MaxClients && IsClientInGame(client)) {
+        hasUsedGluonGun[client] = true;
+        playerAmmo[client] = Clamp(playerAmmo[client] - ammoUsed,0,MAX_AMMO);
+    }
+}
+
+public bool OnClientConnect(int client)
+{
+    // Setzen Sie den Status auf 'false' für den verbindenden Spieler
+    hasUsedGluonGun[client] = true;
+    playerAmmo[client] = START_AMMO;
+    return true;
+
+}
+
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3])
 {
+//    CheckForGluonGunUse(client);
     decl Float:clientpos[3];
     GetClientAbsOrigin(client, clientpos);
 
@@ -23,20 +80,19 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
     do
     {
         ent = FindEntityByClassname(ent, "prop_hev_charger");
-        if (ent == -1) break;  // Break if no entities found
+        if (ent == -1) break;  // Wenn keine weitere Entität gefunden wurde, brechen Sie ab
 
         GetEntPropVector(ent, Prop_Data, "m_vecOrigin", origin);
         
         if (GetVectorDistance(clientpos, origin) < 100)
         {
-            PrintToServer("am near HEV Charger");
+     //       PrintToServer("am near HEV Charger");
 
             new armor = GetEntProp(client, Prop_Send, "m_ArmorValue");
-            PrintToServer("Armor: %i", armor);
+     //       PrintToServer("Armor: %i", armor);
 
             if (armor < 100)
             {
-                PrintToServer("kleiner als 100");
                 CreateTimer(1.0, IncreaseArmor, client, TIMER_REPEAT);
             }
         }
@@ -45,37 +101,42 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
     // Reset ent for the next search
     ent = -1;
 
-    // test for prop_radiation_charger - Not tested yet, didnt found a radiation charger in maps
+    // Überprüfen auf prop_radiation_charger
     do
     {
         ent = FindEntityByClassname(ent, "prop_radiation_charger");
-        if (ent == -1) break;  // Break if no entities found
-        PrintToServer("Radiationcharger near");
-
+        if (ent == -1) break;  // Wenn keine weitere Entität gefunden wurde, brechen Sie ab
         GetEntPropVector(ent, Prop_Data, "m_vecOrigin", origin);
-
-        if (GetVectorDistance(clientpos, origin) < 100)
+        if (GetVectorDistance(clientpos, origin) < 183)
         {
-            PrintToServer("am near Radiation Charger");
 
-            int weaponEntity;
-            for (int i = 0; i < MAX_WEAPONS; i++) 
+            new armor = GetEntProp(client, Prop_Send, "m_ArmorValue");
+            if (armor < 100)
             {
-                weaponEntity = GetPlayerWeaponSlot(client, i);
-                char sClassname[64];
-                GetEntityClassname(weaponEntity, sClassname, sizeof(sClassname));
-                PrintToServer(sClassname);
-                if (weaponEntity != -1 && StrEqual(sClassname, "weapon_gluon"))
-                {
-                    int currentAmmo = GetEntProp(weaponEntity, Prop_Send, "m_iClip1");
-                    if (currentAmmo < GetEntProp(weaponEntity, Prop_Send, "m_iClip1_Max"))
-                    {
-                        PrintToServer("Recharging Gluon Gun");
-                        CreateTimer(1.0, IncreaseGluonAmmo, client, TIMER_REPEAT);
-                        break;  // break while loop , weapon found
-                    }
-                }
+                CreateTimer(1.0, IncreaseArmor, client, TIMER_REPEAT);
             }
+            char weaponClass[64];
+            GetClientWeapon(client, weaponClass, sizeof(weaponClass));
+            if(StrEqual(weaponClass, "weapon_gluon") && hasUsedGluonGun[client])
+            {
+                 
+                 // Bis zu fünf Mal ausführen, um die Munition aufzuladen
+                 int chargesNeeded = (MAX_AMMO - playerAmmo[client] + AMMO_PER_CHARGE - 1) / AMMO_PER_CHARGE; // Aufrunden auf die nächste ganze Zahl
+//                 chargesNeeded = (chargesNeeded, 5); // Maximal 5 Ladungen erlauben
+
+                 // Führen Sie den Befehl zum Aufladen für jede benötigte Ladung aus
+                 for(int i = 0; i < chargesNeeded; i++)
+                 {                 
+                     // Befehl zum Hinzufügen von Energie-Munition für den Spieler
+                     GivePlayerItem(client, "item_ammo_energy");
+                     playerAmmo[client] = Clamp(playerAmmo[client] + AMMO_PER_CHARGE,0,MAX_AMMO);
+                 }
+                 hasUsedGluonGun[client] = false;
+                 // Optional: Überprüfen, ob der Spieler tatsächlich Munition erhalten hat
+                 // und entsprechende Benachrichtigung oder Aktion durchführen
+            }
+
+
         }
     }  while (ent != -1);
 
@@ -101,39 +162,8 @@ public Action IncreaseArmor(Handle:timer, any:client)
     }
 
     SetEntProp(client, Prop_Data, "m_ArmorValue", armor, 1);
-    PrintToServer("Armor erhöht auf: %i", armor);
+//    PrintToServer("Armor erhöht auf: %i", armor);
 
-    return Plugin_Continue;  
-}
-
-
-public Action IncreaseGluonAmmo(Handle:timer, any:client)
-{
-    if (!IsClientConnected(client))
-    {
-        KillTimer(timer);
-        return Plugin_Stop;
-    }
-
-    int weaponEntity = GetPlayerWeaponSlot(client, 1); 
-    char sClassname[64];
-    GetEntityClassname(weaponEntity, sClassname, sizeof(sClassname));
-    if (weaponEntity != -1 && StrEqual(sClassname, "weapon_gluon"))
-    {
-        int currentAmmo = GetEntProp(weaponEntity, Prop_Send, "m_iClip1");
-        int maxAmmo = GetEntProp(weaponEntity, Prop_Send, "m_iClip1_Max");
-        currentAmmo += 1;
-
-        if (currentAmmo >= maxAmmo)
-        {
-            currentAmmo = maxAmmo;
-            KillTimer(timer);
-        }
-
-        SetEntProp(weaponEntity, Prop_Data, "m_iClip1", currentAmmo, 1);
-        PrintToServer("Gluon Gun Ammo erhöht auf: %i", currentAmmo);
-    }
-
-    return Plugin_Continue;
+    return Plugin_Continue;  // Expliziter Rückgabewert hinzugefügt
 }
 
